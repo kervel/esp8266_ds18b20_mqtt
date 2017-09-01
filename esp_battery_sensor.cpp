@@ -1,8 +1,10 @@
 // Do not remove the include below
 #include "esp_battery_sensor.h"
 
+#include <string>
 //#include "OneWire.h"
 #include "DallasTemperature.h"
+
 
 #define ONE_WIRE_BUS 13  // DS18B20 pin
 OneWire oneWire(ONE_WIRE_BUS);
@@ -13,15 +15,14 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 
 unsigned long bootTime;
-char temperatureString[12];
-char voltageString[12];
-
+DeviceAddress devices[10];
+int sensorsFound = 0;
 
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
-  for (int i = 0; i < length; i++) {
+  for (unsigned int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
   }
   Serial.println();
@@ -47,6 +48,14 @@ bool setup_wifi() {
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(wifi_ssid);
+
+  // static ip
+  WiFi.config(
+		  	 IPAddress(192,168,0,233),
+			 IPAddress(192,168,0,1),
+			 IPAddress(255,255,255,0),
+			 IPAddress(8,8,8,8)
+			 );
 
   WiFi.begin(wifi_ssid, wifi_password);
   unsigned long s = millis();
@@ -91,13 +100,18 @@ bool connect_mqtt() {
   return true;
 }
 
-float getTemperature() {
+float getTemperature(DeviceAddress address) {
 	float temp;
-	Serial.print("requesting temp");
 	unsigned long s = millis();
+
+	int xtry = 0;
+
 	do {
-		DS18B20.requestTemperatures();
-		temp = DS18B20.getTempCByIndex(0);
+		xtry += 1;
+		if (xtry % 3 == 0) {
+			DS18B20.requestTemperatures();
+		}
+		temp = DS18B20.getTempC(address);
 		if ((millis() > (s + 1000)) || (millis() < s)) {
 			Serial.print("timeout temp");
 			return -127.0;
@@ -119,6 +133,21 @@ void goToSleep() {
 	delay(500);
 }
 
+void setup_ds18b20() {
+	DS18B20.begin();
+	sensorsFound =  DS18B20.getDeviceCount();
+
+	for (int i = 0; i < sensorsFound; i++)
+		if (!DS18B20.getAddress(devices[i], i))
+			Serial.println("Unable to find address for Device" + i);
+
+	for (int i = 0; i < sensorsFound; i++)
+		DS18B20.setResolution(devices[i], 12);
+
+    DS18B20.setWaitForConversion(true);
+
+}
+
 
 // The loop function is called in an endless loop
 void loop()
@@ -132,15 +161,8 @@ void loop()
 	Serial.print(volts);
 	Serial.println(")");
 
-	float temp = getTemperature();
-	if (temp == -127.0) {
-		goToSleep();
-		return; // should never reach
-	}
 
-	Serial.print("Temperature: ");
-	Serial.print(temp);
-	Serial.println("°C");
+	DS18B20.requestTemperatures();
 
 	if (!setup_wifi()) {
 		goToSleep();
@@ -152,12 +174,19 @@ void loop()
 		return;
 	}
 
+	for (int i =0; i < sensorsFound; i++) {
+		float temp = getTemperature(devices[i]);
+		String s = String(mqtt_topic_temp) + "/";
+		for (unsigned int c=0; c<sizeof(devices[i]);c++) {
+			s += String(devices[i][c],HEX);
+		}
+		String value = String(temp);
+		client.publish(s.c_str(), value.c_str());
+		Serial.print(s + " " + temp + " °C");
+	}
 
-	dtostrf(temp, 3, 3, temperatureString);
-	dtostrf(v_in, 3, 3, voltageString);
 
-	client.publish(mqtt_topic_temp, temperatureString);
-	client.publish(mqtt_topic_volt, voltageString);
+	client.publish(mqtt_topic_volt, String(v_in).c_str());
 
 	client.disconnect();
 
