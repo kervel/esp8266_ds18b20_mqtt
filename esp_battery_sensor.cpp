@@ -51,7 +51,7 @@ bool setup_wifi() {
 
   // static ip
   WiFi.config(
-		  	 IPAddress(192,168,0,233),
+		  	 IPAddress(192,168,0,241),
 			 IPAddress(192,168,0,1),
 			 IPAddress(255,255,255,0),
 			 IPAddress(8,8,8,8)
@@ -144,7 +144,19 @@ void setup_ds18b20() {
 	for (int i = 0; i < sensorsFound; i++)
 		DS18B20.setResolution(devices[i], 12);
 
-    DS18B20.setWaitForConversion(true);
+
+}
+
+
+void blockTillConversionComplete(){
+
+    int delms = 750;
+    if (DS18B20.getCheckForConversion() && !DS18B20.isParasitePowerMode()){
+        unsigned long now = millis();
+        while(!DS18B20.isConversionComplete() && (millis() - delms < now));
+    } else {
+        delay(delms);
+    }
 
 }
 
@@ -161,8 +173,10 @@ void loop()
 	Serial.print(volts);
 	Serial.println(")");
 
-
+	setup_ds18b20();
+    DS18B20.setWaitForConversion(false);
 	DS18B20.requestTemperatures();
+
 
 	if (!setup_wifi()) {
 		goToSleep();
@@ -174,6 +188,9 @@ void loop()
 		return;
 	}
 
+
+	blockTillConversionComplete();
+
 	for (int i =0; i < sensorsFound; i++) {
 		float temp = getTemperature(devices[i]);
 		String s = String(mqtt_topic_temp) + "/";
@@ -182,11 +199,12 @@ void loop()
 		}
 		String value = String(temp);
 		client.publish(s.c_str(), value.c_str());
-		Serial.print(s + " " + temp + " °C");
+		Serial.println(s + " " + temp + " °C");
 	}
 
 
 	client.publish(mqtt_topic_volt, String(v_in).c_str());
+	Serial.println(String(mqtt_topic_volt) + " " + v_in);
 
 	client.disconnect();
 
